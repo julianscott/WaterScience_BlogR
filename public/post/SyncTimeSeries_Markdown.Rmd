@@ -1,0 +1,188 @@
+---
+title: "Syncing Hydrologic Time Series"
+author: "Julian Scott"
+date: "3/1/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+packages <- c("oce","roll","RcppRoll","dataRetrieval","formattable","data.table","hydroTSM","xtable","tidyverse","chron","ggpubr","zoo","plotly","lubridate")
+
+# Check to see if each is installed, and install if not.
+# if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+#   install.packages(setdiff(packages, rownames(installed.packages())))
+# }
+
+# now, use the lapply function to load the installed libraries in the packages list
+lapply(packages,library,character.only=TRUE)
+```
+
+## R Markdown
+
+This code for identifying peaks, adjusting peaks for lag/lead for upstream/downstream timestamps,and plotting for QAQC. This code was written to solve a particular problem and circumstance. Specifically, our Center was carrying out a study on reaches on a few rivers in California and Colorado.
+For each reach, we installed 2 or more pressure transducers to monitor stage at 15 minute invtervals.Each reach also had a nearby upstream or downstream USGS stream gage. In one case, it was necessary to combine main stem flow data with the flow data from a tributary. Thus the code includes a section for combining stream flow from two gages, prior to finding pairs of peaks in the stage and discharge datasets. Because streamflow invariabily passes by the gage some period of time before or after the same pulse of water reaches the sensor, depending on whether  the gage is upstream or downstream of the sensor. Because we wanted to develop stage-discharge rating curves at each site, we wanted to match known discharge measurments at the gage to known  stage measurments from our sensors. To facilitate this, I wrote code that identifies peaks in  both time series (15 minute stage and 15 minute discharge) and further identifies pairs of peaks that  occur within a certain window of time. A table is produced that shows the pairs of peaks and the time difference that separates them (lead/lag). The code includes plotting scripts that allow the analyst to visualize the paired peaks to assist in validating their association.
+
+```{r Read Pressure Transudcer Data}
+# Read in example pressure transducer data from my github site.
+PT <- fread("https://raw.githubusercontent.com/julianscott/R-code-for-matching-peaks/master/mid_SMR_m.csv")
+
+# This code expects time series data to have  two columns, 1=datetime and 2=stage
+
+# standardize column names
+colnames(PT) <- c("DateTime","h")
+
+# Mangement of the date and time data is absolutely critical for time series analysis. When working with times data, daylight savings must be considered. I've found that the R package 'lubridate' is great for this.
+
+# Set time zone for the project. 
+proj_tz = "America/Los_Angeles" #
+
+# Learn more about time zones and the lubridate::tz by running ?tz
+# ?tz
+
+# Also, check OlsonNames (e.g. "America/Los_Angeles") for list of valid time zones
+# OlsonNames(tzdir = NULL)
+
+# Format datetimes. Check input datetime data - is it mdy_hm, ymd_hm, or just ymd? Change code below to match.
+PT <- mutate(PT,DateTime = lubridate::mdy_hm(DateTime,tz = proj_tz))
+
+# View interval of PT time series
+# lubridate::interval(min(ymd_hms(PT[,"DateTime"],tz = proj_tz)),max(ymd_hms(PT[,"DateTime"],tz = proj_tz)))
+
+# We will limit our analysis to the interval defined by the start and stop of the PT data
+PT_start <- min(ymd_hms(PT[,"DateTime"],tz = proj_tz))
+PT_end <- max(ymd_hms(PT[,"DateTime"],tz = proj_tz))
+
+# QAQC tip - view the unique second, minute, and hours that are in your dataset. Is this as you expected?
+# Datetimes and formats are finicky. This dataset uses 15 minute intervals.
+# unique(second(PT$DateTime))
+# unique(minute(PT$DateTime))
+# unique(hour(PT$DateTime))
+
+# QAQC tip - are there gaps in the sensor time series? Here, I find 45 minutes of stage data missing. I fill in the data with the mean of the bounding data (77.047). 
+
+# Check for rows with no stage measurements - there are 3 such consecutive rows.
+# PT[which(is.na(PT$h)),]  
+
+# Check for rows with no datetime - there are 0 such rows.
+# PT[which(is.na(PT$DateTime)),]  
+
+# Fix the 3 erroneous measurements by assigning them the mean of the 2 valid bounding values 
+PT[8356:8360,]
+PT[PT$DateTime ==  ymd_hm("2018-06-06 08:30",tz = proj_tz),"h"] <- 77.047
+PT[PT$DateTime ==  ymd_hm("2018-06-06 08:45",tz = proj_tz),"h"] <- 77.047
+PT[PT$DateTime ==  ymd_hm("2018-06-06 09:00",tz = proj_tz),"h"] <- 77.047
+
+# Make a quick plot of data.
+plot1 <- ggplot(PT,aes(x = DateTime,y = h)) +
+  geom_point() +
+  ggtitle("Time series of 15-minute stage data from Santa Margarita River")+
+  ylab("Stage (m)") +
+  xlab("Date")
+ 
+ggplotly(plot1)
+
+# We can see that there are two periods with weird data, first at the beginning of the time series and then some time in April. The former is associated with sensor deployment, while the latter is unexplicable. I like to take a closer look using ggplotly because it allows you to hover over data and get attributes in a popup.
+
+# Hovering with the mouse, you can see that the dates for first wierd period range from 2018-03-11 07:30 to 09:15, while the second period is 2018-04-22 18:00 to 18:15.  I'll delete the first period (they are influenced by the sensor deployment) and replace the values of the second period with the mean of the valid bounding data. 
+
+PT <- filter(PT,DateTime > ymd_hm("2018-03-11 09:15",tz = proj_tz))
+
+# View second period of wierd data and valid bounding data.
+# PT[between(PT$DateTime,ymd_hm("2018-04-22 17:45",tz = proj_tz),ymd_hm("2018-04-22 18:30",tz = proj_tz)),]
+
+# Change two stages to the mean of the two valid bounding data points
+PT[PT$DateTime ==  ymd_hm("2018-04-22 18:00",tz = proj_tz),"h"] <- 77.132	
+PT[PT$DateTime ==  ymd_hm("2018-04-22 18:15",tz = proj_tz),"h"] <- 77.132	
+
+# rename dataset for work
+pt_data <- PT
+
+#### Code for reading in 15 minute data from usgs gages
+
+# read in flow data for two gages direct from USGS website
+# readNWISuv acquires the current/historical observations (15 minute data)
+
+# the timezone argument handles daylight savings -  observe behaviour on Sunday March 11th 2018 at 2 am and Sunday, Nov 4th 2018 at 2 am.
+gage1_raw <- readNWISuv(site = '11044300', parameterCd="00060",
+                        startDate = date(PT_start),
+                        endDate = date(PT_end),
+                        tz = proj_tz)
+
+gage2_raw <- readNWISuv(site='11044350', parameterCd="00060",
+                        startDate = date(PT_start),
+                        endDate = date(PT_end),
+                        tz = proj_tz)
+
+
+# Rename columns and organize for analysis.  Be certain of your time zones!!  This script assumes all data is in the same time zone, proj_tz.
+
+# For this example, we are adding the flow from the mainstem (gage1) to a nearby tributary (gage2),so I need to align the timestamps first. If you don't need to do this, just do A.
+
+# A.
+gage1 <- dplyr::select(gage1_raw,site_no,dateTime,X_00060_00000,tz_cd)
+colnames(gage1) <- c("site_n","DateTime","gage1_cfs","tz") 
+
+# B.
+gage2 <- dplyr::select(gage2_raw,site_no,dateTime,X_00060_00000,tz_cd)
+colnames(gage2) <- c("site_n","DateTime","gage2_cfs","tz") 
+
+
+# To ensure a continuous sequence of dates, from start to end, by 15 minute interval, I create my own sequence. Importantly, this method accounts for daylight savings time. 
+dateseq <- seq(min(gage1$DateTime),
+               max(gage1$DateTime), 
+               by = '15 mins')
+
+# create new dataframe, with dateseq as the first column
+hydf_dates <- data.frame(DateTime = dateseq)
+
+###########################
+# Use this code for processing 2 usgs gages
+###########################
+
+# Left_join to lookup each value in the two gage records by datetime8.
+hydf <- hydf_dates %>%
+  dplyr::left_join(select(gage1,DateTime,gage1_cfs),by = "DateTime") %>%
+  dplyr::left_join(select(gage2,DateTime,gage2_cfs),by = "DateTime") %>%
+  mutate(q_cfs = gage1_cfs + gage2_cfs,
+         tz_cd = dst(DateTime)) %>%
+  select(DateTime,gage1_cfs,gage2_cfs,q_cfs)
+# head(hydf)
+
+###########################
+# Uncomment and use this code for processing 1 usgs gage
+###########################
+
+# hydf <- hydf_dates %>%
+#   dplyr::left_join(select(gage1,DateTime,gage1_cfs),by = "DateTime") %>%
+#   mutate(q_cfs = gage1_cfs) %>%
+#   select(DateTime,q_cfs)
+# head(hydf)
+
+#### End section of script for reading and formating gage data and pressure transducer data
+###########################################################################################
+#### Begin syncing PT sensor and gage timeseries data
+
+# vector of dates from Q time series
+q_date <- hydf$DateTime 
+
+# vector of flow from Q time series
+q <- hydf$q_cfs      
+
+# use linear interpolation (the approx() command) to calulate the gage Q for each h in pt_data
+# pt_q is a vector the same length as pt_data$datetime, with one interpolated Q for every 
+# datetime in pt_data$datetime.
+# rule = 1 provides an NA for any pt_data$DateTime that is out of the q_date range
+pt_q <- approx(q_date,q,xout = pt_data$DateTime,rule = 1)$y
+
+# add vector of interpolated discahrges to the sensor time series
+pt_data$q_cfs <- pt_q
+
+# View head of synced up data that is now ready for peak matching!
+head(pt_data)
+
+# This is the end of the R method for syncing datetime stamps for pressure transducer and gage data
+###############################################################################
+
+```
+
