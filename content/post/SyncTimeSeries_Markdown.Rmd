@@ -1,13 +1,23 @@
 ---
 title: "Syncing Hydrologic Time Series"
 author: "Julian Scott"
-date: "3/1/2020"
+date: "2020-03-01"
+slug: "Syncing Hydrologic Time Series"
 output: html_document
+categories: []
+tags: []
+subtitle: ''
+description: ''
+image: ''
 ---
+
+
+
+
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-packages <- c("oce","roll","RcppRoll","dataRetrieval","formattable","data.table","hydroTSM","xtable","tidyverse","chron","ggpubr","zoo","plotly","lubridate")
+packages <- c("blogdown","rmarkdown","roll","RcppRoll","dataRetrieval","formattable","data.table","hydroTSM","xtable","tidyverse","chron","ggpubr","zoo","plotly","lubridate")
 
 # Check to see if each is installed, and install if not.
 # if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
@@ -16,6 +26,7 @@ packages <- c("oce","roll","RcppRoll","dataRetrieval","formattable","data.table"
 
 # now, use the lapply function to load the installed libraries in the packages list
 lapply(packages,library,character.only=TRUE)
+
 ```
 
 ## R Markdown
@@ -25,7 +36,7 @@ For each reach, we installed 2 or more pressure transducers to monitor stage at 
 
 ```{r Read Pressure Transudcer Data}
 # Read in example pressure transducer data from my github site.
-PT <- fread("https://raw.githubusercontent.com/julianscott/R-code-for-matching-peaks/master/mid_SMR_m.csv")
+PT <- data.table::fread("https://raw.githubusercontent.com/julianscott/R-code-for-matching-peaks/master/mid_SMR_m.csv")
 
 # This code expects time series data to have  two columns, 1=datetime and 2=stage
 
