@@ -7,14 +7,9 @@ output: html_document
 categories: []
 tags: []
 subtitle: ''
-description: ''
+description: 'Code for syncing time series of stage recorder and stream gage in preparation for matching peaks in the datasets'
 image: ''
 ---
-
-
-
-
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 packages <- c("blogdown","rmarkdown","roll","RcppRoll","dataRetrieval","formattable","data.table","hydroTSM","xtable","tidyverse","chron","ggpubr","zoo","plotly","lubridate")
@@ -28,10 +23,8 @@ packages <- c("blogdown","rmarkdown","roll","RcppRoll","dataRetrieval","formatta
 lapply(packages,library,character.only=TRUE)
 
 ```
-
-## R Markdown
-
 This code for identifying peaks, adjusting peaks for lag/lead for upstream/downstream timestamps,and plotting for QAQC. This code was written to solve a particular problem and circumstance. Specifically, our Center was carrying out a study on reaches on a few rivers in California and Colorado.
+
 For each reach, we installed 2 or more pressure transducers to monitor stage at 15 minute invtervals.Each reach also had a nearby upstream or downstream USGS stream gage. In one case, it was necessary to combine main stem flow data with the flow data from a tributary. Thus the code includes a section for combining stream flow from two gages, prior to finding pairs of peaks in the stage and discharge datasets. Because streamflow invariabily passes by the gage some period of time before or after the same pulse of water reaches the sensor, depending on whether  the gage is upstream or downstream of the sensor. Because we wanted to develop stage-discharge rating curves at each site, we wanted to match known discharge measurments at the gage to known  stage measurments from our sensors. To facilitate this, I wrote code that identifies peaks in  both time series (15 minute stage and 15 minute discharge) and further identifies pairs of peaks that  occur within a certain window of time. A table is produced that shows the pairs of peaks and the time difference that separates them (lead/lag). The code includes plotting scripts that allow the analyst to visualize the paired peaks to assist in validating their association.
 
 ```{r Read Pressure Transudcer Data}
